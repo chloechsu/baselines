@@ -21,7 +21,9 @@ def constfn(val):
 def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0, lr=3e-4,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1, comm=None, **network_kwargs):
+            save_interval=0, load_path=None, model_fn=None, update_fn=None,
+            init_fn=None, mpi_rank_weight=1, comm=None, kl_coef=0.0,
+            policy_dist='Gaussian', **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
 
@@ -70,6 +72,10 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
 
     load_path: str                    path to load the model from
 
+    kl_coef: float                    KL regularization coefficient
+
+    policy_dist: str                       Policy distribution, `gaussian` or `beta`
+
     **network_kwargs:                 keyword arguments to the policy / network builder. See baselines.common/policies.py/build_policy and arguments to a particular type of network
                                       For instance, 'mlp' network architecture has arguments num_hidden and num_layers.
 
@@ -85,7 +91,7 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
     else: assert callable(cliprange)
     total_timesteps = int(total_timesteps)
 
-    policy = build_policy(env, network, **network_kwargs)
+    policy = build_policy(env, network, pdtype_override=policy_dist, **network_kwargs)
 
     # Get the nb of env
     nenvs = env.num_envs
@@ -104,9 +110,11 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
         from baselines.ppo2.model import Model
         model_fn = Model
 
-    model = model_fn(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train,
-                    nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
-                    max_grad_norm=max_grad_norm, comm=comm, mpi_rank_weight=mpi_rank_weight)
+    model = model_fn(policy=policy, ob_space=ob_space, ac_space=ac_space,
+            nbatch_act=nenvs, nbatch_train=nbatch_train, nsteps=nsteps,
+            kl_coef=kl_coef, ent_coef=ent_coef, vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm, comm=comm,
+            mpi_rank_weight=mpi_rank_weight)
 
     if load_path is not None:
         model.load(load_path)

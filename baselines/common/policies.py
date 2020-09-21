@@ -15,7 +15,8 @@ class PolicyWithValue(object):
     Encapsulates fields and methods for RL policy and value function estimation with shared parameters
     """
 
-    def __init__(self, env, observations, latent, estimate_q=False, vf_latent=None, sess=None, **tensors):
+    def __init__(self, env, observations, latent, estimate_q=False,
+            vf_latent=None, sess=None, pdtype_override=None, **tensors):
         """
         Parameters:
         ----------
@@ -28,6 +29,8 @@ class PolicyWithValue(object):
         vf_latent       latent state from which value function should be inferred (if None, then latent is used)
 
         sess            tensorflow session to run calculations in (if None, default session is used)
+
+        pdtype_override 'beta' if using beta instead of Gaussian policy
 
         **tensors       tensorflow tensors for additional attributes such as state or mask
 
@@ -44,7 +47,7 @@ class PolicyWithValue(object):
         latent = tf.layers.flatten(latent)
 
         # Based on the action space, will select what probability distribution type
-        self.pdtype = make_pdtype(env.action_space)
+        self.pdtype = make_pdtype(env.action_space, pdtype_override)
 
         self.pd, self.pi = self.pdtype.pdfromlatent(latent, init_scale=0.01)
 
@@ -118,7 +121,9 @@ class PolicyWithValue(object):
     def load(self, load_path):
         tf_util.load_state(load_path, sess=self.sess)
 
-def build_policy(env, policy_network, value_network=None,  normalize_observations=False, estimate_q=False, **policy_kwargs):
+def build_policy(env, policy_network, value_network=None,
+        normalize_observations=False, estimate_q=False, pdtype_override=None,
+        **policy_kwargs):
     if isinstance(policy_network, str):
         network_type = policy_network
         policy_network = get_network_builder(network_type)(**policy_kwargs)
@@ -172,6 +177,7 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
             vf_latent=vf_latent,
             sess=sess,
             estimate_q=estimate_q,
+            pdtype_override=pdtype_override,
             **extra_tensors
         )
         return policy

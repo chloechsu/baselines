@@ -25,7 +25,7 @@ class Model(object):
     - Save load the model
     """
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
+                nsteps, kl_coef, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
         self.sess = sess = get_session()
 
         if MPI is not None and comm is None:
@@ -84,11 +84,15 @@ class Model(object):
 
         # Final PG loss
         pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
+
+        # Closed-form KL D(p||q), with stopped gradient on q.
+        kl = tf.reduce_mean(train_model.pd.kl(train_model.pd, detach_other=True)) 
+
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
 
         # Total loss
-        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
+        loss = pg_loss + kl * kl_coef - entropy * ent_coef + vf_loss * vf_coef
 
         # UPDATE THE PARAMETERS USING LOSS
         # 1. Get the model parameters

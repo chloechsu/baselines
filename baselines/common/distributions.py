@@ -112,6 +112,29 @@ class DiagGaussianPdType(PdType):
     def sample_dtype(self):
         return tf.float32
 
+class BetaPdType(PdType):
+    def __init__(self, size):
+        self.size = size
+    def pdclass(self):
+        return BetaPd
+
+    def pdfromlatent(self, latent_vector, init_scale=0.01, init_bias=-4.0):
+        x_alpha = _matching_fc(latent_vector, 'x_alpha', self.size,
+                init_scale=init_scale, init_bias=init_bias)
+        x_beta = _matching_fc(latent_vector, 'x_beta', self.size,
+                init_scale=init_scale, init_bias=init_bias)
+        alpha = tf.math.softplus(x_alpha) + 1.0
+        beta = tf.math.softplus(x_beta) + 1.0
+        pdparam = tf.concat([alpha, beta], axis=1)
+        return self.pdfromflat(pdparam), pdparam
+
+    def param_shape(self):
+        return [2*self.size]
+    def sample_shape(self):
+        return [self.size]
+    def sample_dtype(self):
+        return tf.float32
+
 class BernoulliPdType(PdType):
     def __init__(self, size):
         self.size = size
@@ -181,9 +204,11 @@ class CategoricalPd(Pd):
         return tf.nn.softmax_cross_entropy_with_logits_v2(
             logits=self.logits,
             labels=x)
-    def kl(self, other):
+    def kl(self, other, detach_other=False):
         a0 = self.logits - tf.reduce_max(self.logits, axis=-1, keepdims=True)
         a1 = other.logits - tf.reduce_max(other.logits, axis=-1, keepdims=True)
+        if detach_other:
+            a1 = tf.stop_gradient(a1)
         ea0 = tf.exp(a0)
         ea1 = tf.exp(a1)
         z0 = tf.reduce_sum(ea0, axis=-1, keepdims=True)
@@ -224,6 +249,7 @@ class MultiCategoricalPd(Pd):
     def fromflat(cls, flat):
         raise NotImplementedError
 
+
 class DiagGaussianPd(Pd):
     def __init__(self, flat):
         self.flat = flat
@@ -246,6 +272,53 @@ class DiagGaussianPd(Pd):
         return tf.reduce_sum(self.logstd + .5 * np.log(2.0 * np.pi * np.e), axis=-1)
     def sample(self):
         return self.mean + self.std * tf.random_normal(tf.shape(self.mean))
+    @classmethod
+    def fromflat(cls, flat):
+        return cls(flat)
+
+
+class BetaPd(Pd):
+    def __init__(self, flat):
+        self.flat = flat
+        alpha, beta = tf.split(axis=len(flat.shape)-1, num_or_size_splits=2, value=flat)
+        self.alpha = alpha
+        self.beta = beta
+    def flatparam(self):
+        return self.flat
+    def mode(self):
+        return (self.alpha - 1.0) / (self.alpha + self.beta - 2.0)
+    def neglogp(self, x):
+        logp = (self.alpha - 1.0) * tf.math.log(x)
+        logp += (self.beta - 1.0) * tf.math.log(1.0 - x)
+        logp -= tf.math.lbeta(self.alpha, self.beta)
+        return -tf.reduce_sum(logp, axis=-1)
+    def kl(self, other):
+        assert isinstance(other, BetaPd)
+        # Expectation of log x under this pd.
+        e_log_x = tf.math.digamma(self.alpha) - tf.math.digamma(
+                self.alpha + self.beta)
+        # Expectation of log (1-x) under p.
+        e_log_1_m_x = tf.math.digamma(self.beta) - tf.math.digamma(
+                self.alpha + self.beta)
+        kl = (self.alpha - other.alpha) * e_log_x
+        kl += (self.beta - other.beta) * e_log_1_m_x
+        kl -= tf.math.lbeta(self.alpha, self.beta)
+        kl -= tf.math.lbeta(other.alpha, other.beta)
+        return tf.reduce_sum(kl, axis=-1)
+    def entropy(self):
+        ent = tf.math.lbeta(alpha, beta)
+        ent -= (self.alpha - 1.0) * tf.math.digamma(self.alpha)
+        ent -= (self.beta - 1.0) * tf.math.digamma(self.beta)
+        ent += (self.alpha + self.beta - 2.0) * tf.math.digamma(
+                self.alpha + self.beta)
+        return tf.reduce_sum(ent, axis=-1)
+    def sample(self):
+        # X ~ Gamma(alpha, theta), Y ~ Gamma(beta, theta).
+        # then X / (X+Y) is Beta(alpha, beta)
+        # by default scale (theta) = 1
+        u = tf.random.gamma(self.alpha)
+        v = tf.random.gamma(self.beta)
+        return u / (u + v)
     @classmethod
     def fromflat(cls, flat):
         return cls(flat)
@@ -275,10 +348,12 @@ class BernoulliPd(Pd):
     def fromflat(cls, flat):
         return cls(flat)
 
-def make_pdtype(ac_space):
+def make_pdtype(ac_space, override=None):
     from gym import spaces
     if isinstance(ac_space, spaces.Box):
         assert len(ac_space.shape) == 1
+        if override is not None and override == 'beta':
+            return BetaPdType(ac_space.shape[0])
         return DiagGaussianPdType(ac_space.shape[0])
     elif isinstance(ac_space, spaces.Discrete):
         return CategoricalPdType(ac_space.n)
